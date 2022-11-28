@@ -11,6 +11,8 @@ from typing import Literal
 import numpy as np
 import torch
 from torch import multiprocessing
+from tqdm import trange
+
 import ppo_clip
 rnd = np.random.default_rng()
 
@@ -94,7 +96,8 @@ class Character:
             self.meleeDamageDie = Dice(str(1)+self.meleeWeapon.baseDie+'+'+str(self.ability_mods[Ability.STR]))
 
         self.rangedToHit = self.bab + self.ability_mods[Ability.DEX]
-        self.rangedDamageDie = Dice(str(1)+self.rangedWeapon.baseDie)
+        if self.rangedWeapon:
+            self.rangedDamageDie = Dice(str(1)+self.rangedWeapon.baseDie)
 
         # Spellcasting
         self.max_spells = np.array(spells, dtype=int)
@@ -551,10 +554,11 @@ def run_epoch(args):
             FullDefense(),
             HealingPotion('potion of healing', '2d4+2', uses=3),
         ],
-        ability_mods=[3,2,2,-1,1,0], saving_throws=[5,2,4,-1,1,0])
+        ability_mods=[3,2,2,-1,1,0], saving_throws=[5, 5, 1])
     wizard_lvl2 = lambda i: PPOCharacter(strategies[1], name=f'Wizard {i}', team=0, hp=14, bab=1,
         armor=Unarmored(),
         meleeWeapon=UnarmedStrike(),
+        rangedWeapon=None,
         actions=[
             MeleeAttack(),
             MageArmor(),
@@ -562,17 +566,18 @@ def run_epoch(args):
             RayOfFrost(),
             FullDefense()
         ],
-        ability_mods=[-1,2,2,3,1,0], saving_throws=[-1,2,2,5,3,0],
-        spells=[3,0,0,0,0,0,0,0,0], spell_save=13)
+            ability_mods=[-1,2,2,3,1,0], saving_throws=[2, 2, 4],
+            spells=[3,0,0,0,0,0,0,0,0], spell_save=13)
     #goblin = lambda i: RandomCharacter(f'Goblin {i}', team=1, hp=roll('2d6'), ac=15, actions=[
     goblin = lambda i: PPOCharacter(strategies[2], survival=0, name=f'Goblin {i}', team=1, hp=roll('2d6'), bab=1,
         armor=StuddedLeather(),
-        weapon=SmallScimitar(),
+        meleeWeapon=SmallScimitar(),
+        rangedWeapon=None,
         actions=[
             MeleeAttack(),
             FullDefense(),
         ],
-        ability_mods=[-1,2,0,0,-1,1])
+        ability_mods=[-1,2,0,0,-1,1], saving_throws=[3, 4, -1])
     wins = 0
     for encounter_id in range(n):
         env = [fighter_lvl2(1), wizard_lvl2(1), fighter_lvl2(2), wizard_lvl2(2)]
@@ -595,10 +600,10 @@ def merge_ppo_data(ppo_buffers):
 
 def main():
     epochs = 100
-    ncpu = 1 # using 8 doesn't seem to help on an M1
-    strategies = [PPOStrategy(3), PPOStrategy(4), PPOStrategy(2)]
+    ncpu = 8 # using 8 doesn't seem to help on an M1
+    strategies = [PPOStrategy(4), PPOStrategy(5), PPOStrategy(2)]
     with multiprocessing.Pool(ncpu, init_workers, (strategies,)) as pool:
-        for epoch in range(epochs):
+        for epoch in trange(epochs):
             t1 = time.time()
             results = pool.map(run_epoch, [(epoch, 1000//ncpu) for _ in range(ncpu)])
             # transpose results matrix so entries of same type are together

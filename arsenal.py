@@ -11,31 +11,32 @@ class Armor:
         self.maxDexBonus = max_dex_bonus
         self.type = armor_type
 
-    def getAcBonus(self):
-        return self.acBonus
-
-class Unarmored():
-    def __init__(self, name: str = 'Unarmored',
-                 ac: int = 0,
-                 armor_type: ARMOR_TYPE = 'none',
-                 max_dex_bonus: int = 100):
-        super().__init__(name, ac, armor_type, max_dex_bonus)
+class Unarmored(Armor):
+    def __init__(self):
+        super().__init__(
+            name='Unarmored',
+            ac=0,
+            armor_type='none',
+            max_dex_bonus=100)
 
 class StuddedLeather(Armor):
-    def __init__(self, name: str = 'Studded Leather Armor',
-                 ac: int = 3,
-                 armor_type: ARMOR_TYPE = 'light',
-                 max_dex_bonus: int = 5):
-        super().__init__(name, ac, armor_type, max_dex_bonus)
-        self.dexPenalty = -1
+    def __init__(self):
+        super().__init__(
+            name='Studded Leather Armor',
+            ac=2,
+            armor_type='light',
+            max_dex_bonus=5,
+            dex_penalty=-1)
+
 
 class FullPlate(Armor):
-    def __init__(self, name: str = 'Full Plate Armor',
-                 ac: int = 9,
-                 armor_type: ARMOR_TYPE = 'heavy',
-                 max_dex_bonus: int = 1):
-        super().__init__(name, ac, armor_type, max_dex_bonus)
-        self.dexPenalty = -6
+    def __init__(self):
+        super().__init__(
+            name='Full Plate Armor',
+            ac= 9,
+            armor_type='heavy',
+            max_dex_bonus= 1,
+            dex_penalty= -6)
 
 class Weapon:
     def __init__(self, name:str, ranged:bool, base_die:str, crit_range:int, crit_mul:int, damage_type:str,
