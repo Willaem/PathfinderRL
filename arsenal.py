@@ -1,6 +1,6 @@
 from typing import Literal
 
-ARMOR_TYPE = Literal['light', 'medium', 'heavy']
+ARMOR_TYPE = Literal['none', 'light', 'medium', 'heavy']
 
 
 class Armor:
@@ -13,6 +13,13 @@ class Armor:
 
     def getAcBonus(self):
         return self.acBonus
+
+class Unarmored():
+    def __init__(self, name: str = 'Unarmored',
+                 ac: int = 0,
+                 armor_type: ARMOR_TYPE = 'none',
+                 max_dex_bonus: int = 100):
+        super().__init__(name, ac, armor_type, max_dex_bonus)
 
 class StuddedLeather(Armor):
     def __init__(self, name: str = 'Studded Leather Armor',
@@ -46,11 +53,28 @@ class Weapon:
         self.finesse = finesse #Melee weapon trait
 
 
+class UnarmedStrike(Weapon):
+    def __init__(self, name: str = 'Unarmed Strike',
+                 ranged: bool = False,
+                 base_die: str = 'd4',
+                 crit_range: int = 20,
+                 crit_mul: int = 2,
+                 damage_type: str = 'bludgeoning'):
+        super().__init__(name, ranged, base_die, crit_range, crit_mul, damage_type)
 class Longsword(Weapon):
     def __init__(self, name: str = 'Longsword',
                  ranged: bool = False,
                  base_die: str = 'd8',
                  crit_range: int = 19,
+                 crit_mul: int = 2,
+                 damage_type: str = 'slashing'):
+        super().__init__(name, ranged, base_die, crit_range, crit_mul, damage_type)
+
+class SmallScimitar(Weapon):
+    def __init__(self, name: str = 'Small Scimitar',
+                 ranged: bool = False,
+                 base_die: str = 'd4',
+                 crit_range: int = 18,
                  crit_mul: int = 2,
                  damage_type: str = 'slashing'):
         super().__init__(name, ranged, base_die, crit_range, crit_mul, damage_type)

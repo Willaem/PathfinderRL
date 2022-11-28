@@ -16,8 +16,8 @@ rnd = np.random.default_rng()
 
 # Import armor and weapons
 from arsenal import Weapon, Armor
-from arsenal import StuddedLeather, FullPlate
-from arsenal import Longsword, Greatsword, Longbow
+from arsenal import StuddedLeather, FullPlate, Unarmored
+from arsenal import Longsword, Greatsword, Longbow, UnarmedStrike, SmallScimitar
 
 
 # Setup vars
@@ -31,7 +31,7 @@ Saving_Throw = enum.IntEnum('Saving Throw', 'REF FORT WILL', start=0)
 
 epoch_id = encounter_id = round_id = -1
 actions_csv = csv.writer(open(f"actions_{os.getpid()}.csv", "w"))
-actions_csv.writerow('epoch encounter round actor action target t_dodging t_weakest raw_hp obs_hp'.split())
+actions_csv.writerow('epoch encounter round actor action target t_fullDefense t_weakest raw_hp obs_hp'.split())
 outcomes_csv = csv.writer(open(f"outcomes_{os.getpid()}.csv", "w"))
 outcomes_csv.writerow('epoch encounter num_rounds actor team team_win max_hp final_hp'.split())
 
@@ -64,7 +64,7 @@ class Character:
     def __init__(self, name: str, team: int, hp: int, bab: int, armor: Armor,
                  meleeWeapon: Weapon, rangedWeapon: Weapon, actions: list[Action],
                  ability_mods: list[int] = [0]*6, saving_throws: list[int] = None,
-                 spells: list[int] = [0]*9, spell_attack=2, spell_save=10):
+                 spells: list[int] = [0]*9, spell_save=10):
         self.name = name
         self.team = team
 
@@ -79,7 +79,9 @@ class Character:
         self.actions = actions
 
         # Infered stats
-        self.ac = 10 + max(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + armor.acBonus
+        self.ac = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + self.armor.acBonus
+        self.touchAc = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus)
+        self.flatFootedAc = 10 + self.armor.acBonus
 
         if self.meleeWeapon.finesse:
             self.meleeToHit = self.bab + self.ability_mods[Ability.DEX]
@@ -97,7 +99,6 @@ class Character:
         # Spellcasting
         self.max_spells = np.array(spells, dtype=int)
         self.curr_spells = self.max_spells.copy()
-        self.spell_attack = D20(spell_attack)
         self.spell_save_dc = spell_save
 
         # State
@@ -400,7 +401,7 @@ class HealingPotion(Action):
         after_hp = target.hp
         self.uses -= 1
         #print(f"{actor.name} used {self.name} on {target.name} for {heal_roll}")
-        actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.dodging, t_weakest, heal_roll, after_hp - before_hp])
+        actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.fullDefense, t_weakest, heal_roll, after_hp - before_hp])
 
 class Spell(Action):
     # def __init__(self, name: str, level: int, concentration: bool = False):
@@ -416,21 +417,21 @@ class Spell(Action):
 
     def _spell_attack(self, actor: Character, target: Character, env: Environment, dmg_dice: Dice, dmg_type: str):
         if target.fullDefense:
-            ac_to_hit = target.ac + 4
+            ac_to_hit = target.touchAc + 4
         else:
-            ac_to_hit = target.ac
+            ac_to_hit = target.touchAc
         t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other))
         # all([]) == True, which seems ok
-        attack_roll, nat_roll = actor.spell_attack.roll()
+        attack_roll, nat_roll = D20(actor.rangedToHit).roll()
         if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1:
             crit_hit = (nat_roll == 20) or target.unconscious # critical hits work with spell attacks too
             dmg_roll = dmg_dice.roll(crit_hit=crit_hit)
             before_hp = target.hp
             target.damage(dmg_roll, dmg_type)
             after_hp = target.hp
-            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.dodging, t_weakest, -dmg_roll, after_hp - before_hp])
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.fullDefense, t_weakest, -dmg_roll, after_hp - before_hp])
         else:
-            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.dodging, t_weakest, 0, 0])
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.fullDefense, t_weakest, 0, 0])
 
     def __call__(self, actor: Character, target: Character, env: Environment):
         if self.is_forbidden(actor, env): return
@@ -444,8 +445,9 @@ class MageArmor(Spell):
     plausible_target = Action._conscious_ally
 
     def call(self, actor: Character, target: Character, env: Environment):
-        target.ac = 13 + target.ability_mods[Ability.DEX]
-        actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.dodging, False, 0, 0])
+        target.ac = 10 + min(target.ability_mods[Ability.DEX], target.armor.maxDexBonus) + max(target.armor.acBonus, 4)
+        target.flatFootedAc = 10 + max(target.armor.acBonus, 4)
+        actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.fullDefense, False, 0, 0])
 
 class MagicMissle(Spell):
     name = 'Magic Missle'
@@ -456,11 +458,11 @@ class MagicMissle(Spell):
     def call(self, actor: Character, target: Character, env: Environment):
         # Automatically hits.  TODO:  should be able to target multiple opponents
         t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other))
-        dmg_roll = roll('3d4+3')
+        dmg_roll = roll('1d4+1')
         before_hp = target.hp
         target.damage(dmg_roll, 'force')
         after_hp = target.hp
-        actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.dodging, t_weakest, -dmg_roll, after_hp - before_hp])
+        actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.fullDefense, t_weakest, -dmg_roll, after_hp - before_hp])
 
 class RayOfFrost(Spell):
     name = 'Ray of Frost'
@@ -469,7 +471,7 @@ class RayOfFrost(Spell):
     plausible_target = Action._conscious_enemy
 
     def call(self, actor: Character, target: Character, env: Environment):
-        self._spell_attack(actor, target, env, Dice('1d8'), 'cold')
+        self._spell_attack(actor, target, env, Dice('1d3'), 'cold')
 
 class Sleep(Spell):
     name = 'Sleep'
@@ -546,28 +548,29 @@ def run_epoch(args):
         actions=[
             MeleeAttack(),
             RangedAttack(),
+            FullDefense(),
             HealingPotion('potion of healing', '2d4+2', uses=3),
         ],
         ability_mods=[3,2,2,-1,1,0], saving_throws=[5,2,4,-1,1,0])
-    wizard_lvl2 = lambda i: PPOCharacter(strategies[1], name=f'Wizard {i}', team=0, hp=14, ac=12, actions=[
-            Dodge(),
-            #Awaken(),
-            #MeleeAttack('quarterstaff (two-handed)', +1, '1d8-1', 'bludgeoning'), # worse hit & damage than dagger
-            #MeleeAttack('dagger', +4, '1d4+2', 'piercing'), # worse hit than RayOfFrost
+    wizard_lvl2 = lambda i: PPOCharacter(strategies[1], name=f'Wizard {i}', team=0, hp=14, bab=1,
+        armor=Unarmored(),
+        meleeWeapon=UnarmedStrike(),
+        actions=[
+            MeleeAttack(),
             MageArmor(),
             MagicMissle(),
-            RayOfFrost(), # better hit & same damage as dagger
-            #Sleep(),
-            # Witch Bolt -- too much state tracking!
-            # Charm Person?
+            RayOfFrost(),
+            FullDefense()
         ],
         ability_mods=[-1,2,2,3,1,0], saving_throws=[-1,2,2,5,3,0],
-        spells=[3,0,0,0,0,0,0,0,0], spell_attack=5, spell_save=13)
+        spells=[3,0,0,0,0,0,0,0,0], spell_save=13)
     #goblin = lambda i: RandomCharacter(f'Goblin {i}', team=1, hp=roll('2d6'), ac=15, actions=[
-    goblin = lambda i: PPOCharacter(strategies[2], survival=0, name=f'Goblin {i}', team=1, hp=roll('2d6'), ac=15, actions=[
-            Dodge(),
-            #Awaken(),
-            MeleeAttack('scimitar', +4, '1d6+2', 'slashing')
+    goblin = lambda i: PPOCharacter(strategies[2], survival=0, name=f'Goblin {i}', team=1, hp=roll('2d6'), bab=1,
+        armor=StuddedLeather(),
+        weapon=SmallScimitar(),
+        actions=[
+            MeleeAttack(),
+            FullDefense(),
         ],
         ability_mods=[-1,2,0,0,-1,1])
     wins = 0
