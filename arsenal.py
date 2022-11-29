@@ -28,6 +28,25 @@ class StuddedLeather(Armor):
             max_dex_bonus=5,
             dex_penalty=-1)
 
+class BreastPlate(Armor):
+    def __init__(self):
+        super().__init__(
+            name='Breatplate Armor',
+            ac=6,
+            armor_type='medium',
+            max_dex_bonus=3,
+            dex_penalty=-4
+        )
+
+class MedusaNaturalArmor(Armor):
+    def __init__(self):
+        super().__init__(
+            name='Natural Armor',
+            ac=3,
+            armor_type='none',
+            max_dex_bonus=100,
+            dex_penalty=0
+        )
 
 class FullPlate(Armor):
     def __init__(self):
@@ -89,6 +108,17 @@ class Greatsword(Weapon):
                  damage_type: str = 'slashing'):
         super().__init__(name, ranged, base_die, crit_range, crit_mul, damage_type)
         self.twoHanded = True
+
+class HeavyMace(Weapon):
+    def __init__(self):
+        super().__init__(
+            name='Heavy Mace',
+            ranged=False,
+            base_die='d8',
+            crit_range=20,
+            crit_mul=2,
+            damage_type='bludgeoning'
+        )
 
 class Longbow(Weapon):
     def __init__(self, name: str = 'Longbow',

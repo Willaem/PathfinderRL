@@ -19,20 +19,24 @@ import ppo_clip
 rnd = np.random.default_rng()
 
 # Import armor and weapons
-from arsenal import *
+from arsenal import Weapon, Armor
+from arsenal import StuddedLeather, FullPlate, Unarmored
+from arsenal import Longsword, Greatsword, Longbow, UnarmedStrike, SmallScimitar
+
 
 # Setup vars
 MAX_TURNS = 100
-MAX_CHARS = 3 + 6
+MAX_CHARS = 1 + 3
 OBS_SIZE = 4 * MAX_CHARS
 HP_SCALE = 20 # roughly, max HP across all entities in the battle (but a fixed constant, not rolled dice!)
+BATTLEFIELD_SIZE = 10
 
 Ability = enum.IntEnum('Ability', 'STR DEX CON INT WIS CHA', start=0)
 Saving_Throw = enum.IntEnum('Saving Throw', 'REF FORT WILL', start=0)
 
 epoch_id = encounter_id = round_id = -1
 actions_csv = csv.writer(open(f"actions_{os.getpid()}.csv", "w"))
-actions_csv.writerow('epoch encounter round actor action target t_fullDefense t_weakest raw_hp obs_hp'.split())
+actions_csv.writerow('epoch encounter round actor action target t_fullDefense t_weakest raw_hp obs_hp ini_pos_x ini_pos_y fin_pos_x fin_pos_y'.split())
 outcomes_csv = csv.writer(open(f"outcomes_{os.getpid()}.csv", "w"))
 outcomes_csv.writerow('epoch encounter num_rounds actor team team_win max_hp final_hp'.split())
 
@@ -73,12 +77,12 @@ class Character:
         self.max_hp = self.hp = hp
         self.ability_mods = list(ability_mods)
         self.saving_throws = list(saving_throws) # if None, default == to ability_mods
-        self.death_treshold = -10 - self.ability_mods[Ability.CON] * 2
         self.armor = armor
         self.meleeWeapon = meleeWeapon
         self.rangedWeapon = rangedWeapon
         self.bab = bab
         self.actions = actions
+        self.speed = 6
 
         # Infered stats
         self.ac = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + self.armor.acBonus
@@ -106,35 +110,29 @@ class Character:
         self.curr_spells = self.max_spells.copy()
         self.spell_save_dc = spell_save
 
-        # Status
+        # State
         self.unconscious = False
-        self.petrified = False
-        self.dead = False
-        self.coma = False
-
-        # State update
         self.start_of_round() # initializes some properties
         self.flatFooted = True # Everyone starts flat-footed
 
-    def get_ac(self, ff):
+    def get_ac(self):
         ac = self.ac
         if self.fullDefense:
             ac += 4
-        if self.flatFooted or ff or self.petrified:
+        if self.flatFooted:
             ac = self.flatFootedAc
         return ac
 
-    def get_touch_ac(self, ff):
+    def get_touch_ac(self):
         ac = self.touchAc
         if self.fullDefense:
             ac += 4
-        if self.flatFooted or ff:
-            ac = 10
         return ac
 
     def start_of_round(self):
         self.fullDefense = False
         self.flatFooted = False
+        self.aoo = self.ability_mods[Ability.DEX]
 
     def end_of_encounter(self, env):
         pass
@@ -150,21 +148,15 @@ class Character:
 
     def damage(self, dmg_hp: int, dmg_type: str):
         "Apply damage to this character"
-        self.hp = max(self.death_treshold, self.hp - dmg_hp)
-        if self.hp < 0:
-            self.coma = True
-            if self.hp == self.death_treshold:
-                self.dead = True
+        self.hp = max(0, self.hp - dmg_hp)
         self.unconscious = False
 
     def heal(self, heal_hp: int):
         "Apply healing to this character"
-        if self.hp <= self.death_treshold:
-            pass
+        if self.hp <= 0:
+            self.hp = 1
         else:
             self.hp = min(self.max_hp, self.hp + heal_hp)
-            if self.hp >= 0:
-                self.coma = False
 
 class RandomCharacter(Character):
     def act(self, env):
@@ -179,6 +171,120 @@ class RandomCharacter(Character):
             return
         target = rnd.choice(targets)
         action(actor=self, target=target)
+
+
+class Graphttlefield():
+    def __init__(self, x, y, characters):
+        self.graph : nx.Graph = nx.grid_2d_graph(x, y)
+        self.graph.add_edges_from([
+            ((i,j), (i+1, j+1))
+            for i in range(x-1)
+            for j in range(y-1)
+        ] + [
+        ((i+1, j), (i, j+1))
+        for i in range(x-1)
+        for j in range(y-1)
+        ], weight=1)
+
+        self.positionMap = {} # Char name to node
+
+        nx.set_node_attributes(self.graph, None, 'char')
+
+        i, j = 0, 0
+        for char in characters:
+            if char.team == 0:
+                self.graph.nodes[0, i]['char'] = char
+                self.positionMap[char.name] = 0, i
+                i += 1
+            if char.team == 1:
+                self.graph.nodes[y-1, j]['char'] = char
+                self.positionMap[char.name] = y-1, j
+                j += 1
+
+    def getCharNode(self, char):
+        #return [i for i in self.graph.nodes(data=True) if i[1]['char'] == char][0]
+        return self.positionMap[char.name]
+
+    def getDist(self, actor, target):
+        return len(nx.bidirectional_shortest_path(self.graph, source=self.getCharNode(actor.name),
+                                                              target=self.getCharNode(target.name))) - 2
+
+    def meleePathExists(self, actor, target):
+        return actor.speed >= len(nx.bidirectional_shortest_path(self.graph, source=self.getCharNode(actor.name),
+                                                              target=self.getCharNode(target.name))) - 2
+
+    def moveCharacterTo(self, actor, target):
+        actorPosition = self.getCharNode(actor.name)
+        targetPosition = self.getCharNode(target.name)
+
+        freeSquares = (node for node, data in self.graph.nodes(data=True) if data.get['char'] is not None)
+        try:
+            pathToTarget = nx.bidirectional_shortest_path(self.graph.subgraph(freeSquares),
+                                                      source=actorPosition, target=targetPosition)
+        except NetworkXNoPath:
+            return False
+
+        finalPositionOfActor = pathToTarget[-2]
+
+        # Five foot step
+        if len(pathToTarget) - 2 == 1:
+            self.completeMovement(actor, actorPosition, finalPositionOfActor)
+
+        # Longer movement provokes attacks of opportunity
+        for square in pathToTarget[0:-2]:
+            potential_enemies = [self.graph.nodes[i]['char'] for i in self.graph.neighbors(square)
+                                 if self.graph.nodes[i]['char'] is not None
+                                 and self.graph.nodes[i]['char'].team != actor.team]
+            for enemy in potential_enemies:
+                makeAOO(enemy, actor)
+                if actor.hp <= 0:
+                    self.completeMovement(actor, actorPosition, square)
+                    return
+
+        self.completeMovement(actor, actorPosition, finalPositionOfActor)
+
+    def flee(self, actor, env):
+        actorPosition = self.getCharNode(actor.name)
+        avoidThesePlaces = []
+
+        for enemy in env.characters:
+            if enemy.team != actor.team and enemy.hp > 0:
+                avoidThesePlaces.append(env.battlefield.getCharNode(enemy.name))
+
+
+    def completeMovement(self, actor, actorPosition, finalPositionOfActor):
+        self.graph.nodes[finalPositionOfActor]['char'] = actor
+        self.graph.nodes[actorPosition]['char'] = None
+        self.positionMap[actor.name] = finalPositionOfActor
+
+    def isFlanked(self, actor):
+        potential_enemies_squares = [node for node in self.graph.neighbors(self.getCharNode(actor))
+                                 if self.graph.nodes[node]['char'] is not None
+                                 and self.graph.nodes[node]['char'].team != actor.team]
+
+        for square_1, square_2 in zip(potential_enemies_squares, potential_enemies_squares[1:]):
+            if square_1[0] == -square_2[0] and square_1[1] == -square_2[1]:
+                return True
+        return False
+
+
+def makeAOO(actor, target):
+    if actor.aoo > 0 & actor.hp > 0:
+        ac_to_hit = target.get_ac()
+        attack_roll, nat_roll = D20(actor.meleeToHit).roll()
+        if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1:
+            crit_hit = (nat_roll >= actor.meleeWeapon.critRange) or target.unconscious
+            dmg_roll = actor.meleeDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.meleeWeapon.critMul)
+            before_hp = target.hp
+            target.damage(dmg_roll, actor.meleeWeapon.damage_type)
+            after_hp = target.hp
+            # print(f"{actor.name} attacked {target.name} with {self.name} for {dmg_roll}")
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Melee AOO with '+actor.meleeWeapon.name,
+                                  target.name, target.fullDefense, None, -dmg_roll, after_hp - before_hp])
+        else:
+            #print(f"{actor.name} attacked {target.name} with {self.name} and missed")
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.meleeWeapon.name,
+                                  target.name, target.fullDefense, None, 0, 0])
 
 
 class PPOStrategy:
@@ -228,8 +334,10 @@ class PPOCharacter(Character):
                 #(c.ac - 10) / 10,              # Armor class.  Right now, does not change.
                 c == self,                      # Ourself? maybe useful when 1 AI plays many monsters
                 (c.max_hp - c.hp) / HP_SCALE,   # Absolute hp lost -- we can track this as a player.
-                c.dead,                         # Death (HP below death treshold)
-                c.fullDefense,                  # Pathfinder full Defense action adds AC
+                c.unconscious,                  # Unconscious (not counting hp <= 0)
+                c.fullDefense,
+                env.battlefield.getCharNode(c.name)[0]/BATTLEFIELD_SIZE, #Coordinates of the character, normalized?
+                env.battlefield.getCharNode(c.name)[1]/BATTLEFIELD_SIZE
                 # Below this point is cheating -- info not available to players, only DM
                 #c.hp / HP_SCALE,               # current absolute health
                 #c.max_hp / self.max_hp,        # Stronger or weaker than us? Varies if hp are rolled.
@@ -256,7 +364,7 @@ class PPOCharacter(Character):
         team_frac = hp[team].sum() / max_hp[team].sum()
         opp_frac = hp[~team].sum() / max_hp[~team].sum()
         team_size = team.sum()
-        team_deaths = sum(char for char in team if char.dead)
+        team_deaths = (hp[team] == 0).sum()
         # If `survival` is 0, there's no special attempt to avoid deaths.
         # If `survival` is 1, it's better to have 2 characters at 1 hp than one dead and one full.
         # The default of 0.5 means avoiding death is worth half of a teammate's hp.
@@ -308,7 +416,7 @@ class Action:
     def is_forbidden(self, actor: Character, env: Environment):
         return False
 
-    def plausible_target(self, actor: Character, target: Character):
+    def plausible_target(self, actor: Character, target: Character, env: Environment):
         return True
 
     def _self_only(self, actor: Character, target: Character):
@@ -316,16 +424,13 @@ class Action:
         return actor == target
 
     def _conscious_ally(self, actor: Character, target: Character):
-        return target.team == actor.team and not target.coma
-
-    def _living_ally(self, actor: Character, target: Character):
-        return target.team == actor.team and not target.dead
+        return target.team == actor.team and target.hp > 0
 
     def _unconscious_ally(self, actor: Character, target: Character):
         return target.team == actor.team and target.unconscious
 
     def _conscious_enemy(self, actor: Character, target: Character):
-        return target.team != actor.team and not target.coma
+        return target.team != actor.team and target.hp > 0
 
 class FullDefense(Action):
     name = 'Full Defense'
@@ -344,53 +449,68 @@ class Awaken(Action):
         target.unconscious = False
         actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, False, False, 0, 0])
 
-class MeleeAttack(Action):
-    def plausible_target(self, actor: Character, target: Character):
-        return target.team != actor.team and not target.dead
+class MoveAndMeleeAttack(Action):
+    def plausible_target(self, actor: Character, target: Character, env: Environment):
+        return target.team != actor.team and target.hp > 0 and env.battlefield.meleePathExists(actor, target)
 
     def __call__(self, actor: Character, target: Character, env: Environment):
-        ac_to_hit = target.get_ac(False)
-        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
-        # all([]) == True, which seems ok
-        attack_roll, nat_roll = D20(actor.meleeToHit).roll()
-        if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1:
-            crit_hit = (nat_roll >= actor.meleeWeapon.critRange) or target.unconscious or target.coma
-            dmg_roll = actor.meleeDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.meleeWeapon.critMul)
-            before_hp = target.hp
-            target.damage(dmg_roll, actor.meleeWeapon.damage_type)
-            after_hp = target.hp
-            #print(f"{actor.name} attacked {target.name} with {self.name} for {dmg_roll}")
-            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.meleeWeapon.name,
-                                  target.name, target.fullDefense, t_weakest, -dmg_roll, after_hp - before_hp])
-        else:
-            #print(f"{actor.name} attacked {target.name} with {self.name} and missed")
-            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.meleeWeapon.name,
-                                  target.name, target.fullDefense, t_weakest, 0, 0])
+        # Movement
+        original_pos = env.battlefield.getCharNode(actor)
+        env.battlefield.moveCharacterTo(actor, target)
+        final_pos = env.battlefield.getCharNode(actor)
 
-class RangedAttack(Action):
-    def plausible_target(self, actor: Character, target: Character):
-        return target.team != actor.team and not target.dead
+        if actor.hp > 0:
+            ac_to_hit = target.get_ac()
+            t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other, env))
+            # all([]) == True, which seems ok
+            attack_roll, nat_roll = D20(actor.meleeToHit).roll()
+            if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1:
+                crit_hit = (nat_roll >= actor.meleeWeapon.critRange) or target.unconscious
+                dmg_roll = actor.meleeDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.meleeWeapon.critMul)
+                before_hp = target.hp
+                target.damage(dmg_roll, actor.meleeWeapon.damage_type)
+                after_hp = target.hp
+                #print(f"{actor.name} attacked {target.name} with {self.name} for {dmg_roll}")
+                actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.meleeWeapon.name,
+                                      target.name, target.fullDefense, t_weakest, -dmg_roll, after_hp - before_hp,
+                              original_pos[0], original_pos[1], final_pos[0], final_pos[1]])
+            else:
+                #print(f"{actor.name} attacked {target.name} with {self.name} and missed")
+                actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.meleeWeapon.name,
+                                      target.name, target.fullDefense, t_weakest, 0, 0,
+                              original_pos[0], original_pos[1], final_pos[0], final_pos[1]])
+        else: actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Interrupted',
+                              target.name, target.fullDefense, None, 0, 0,
+                              original_pos[0], original_pos[1], final_pos[0], final_pos[1]])
+
+class StayAndRangedAttack(Action):
+    def plausible_target(self, actor: Character, target: Character, env: Environment):
+        return target.team != actor.team and target.hp > 0
 
     def __call__(self, actor: Character, target: Character, env: Environment):
-        ac_to_hit = target.get_ac(False)
-        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
+        position = env.battlefield.getCharNode(actor)
+
+        ac_to_hit = target.get_ac()
+        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other))
         # all([]) == True, which seems ok
         attack_roll, nat_roll = D20(actor.rangedToHit).roll()
         if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1:
-            crit_hit = (nat_roll >= actor.rangedWeapon.critRange) or target.unconscious or target.coma
+            crit_hit = (nat_roll >= actor.rangedWeapon.critRange) or target.unconscious
             dmg_roll = actor.meleeDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.rangedWeapon.critMul)
             before_hp = target.hp
             target.damage(dmg_roll, actor.rangedWeapon.damage_type)
             after_hp = target.hp
             #print(f"{actor.name} attacked {target.name} with {self.name} for {dmg_roll}")
             actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.rangedWeapon.name,
-                                  target.name, target.fullDefense, t_weakest, -dmg_roll, after_hp - before_hp])
+                                  target.name, target.fullDefense, t_weakest, -dmg_roll, after_hp - before_hp,
+                              position[0], position[1], position[0], position[1]])
         else:
             #print(f"{actor.name} attacked {target.name} with {self.name} and missed")
             actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.rangedWeapon.name,
-                                  target.name, target.fullDefense, t_weakest, 0, 0])
+                                  target.name, target.fullDefense, t_weakest, 0, 0,
+                              position[0], position[1], position[0], position[1]])
 
-class HealingPotion(Action):
+class MoveAndHealingPotion(Action):
     def __init__(self, name: str, heal_dice: str, uses: int = 1):
         self.name = name
         self.heal_dice = Dice(heal_dice)
@@ -399,21 +519,37 @@ class HealingPotion(Action):
     def is_forbidden(self, actor: Character, env: Environment):
         return (self.uses <= 0)
 
-    def plausible_target(self, actor: Character, target: Character):
-        return target.team == actor.team and target.hp < target.max_hp and not target.dead
+    def plausible_target(self, actor: Character, target: Character, env:Environment):
+        return target.team == actor.team and target.hp < target.max_hp and env.battlefield.meleePathExists(actor, target)
 
     def __call__(self, actor: Character, target: Character, env: Environment):
         if self.is_forbidden(actor, env):
             return
-        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other))
-        # all([]) == True, which seems ok
-        heal_roll = self.heal_dice.roll()
-        before_hp = target.hp
-        target.heal(heal_roll)
-        after_hp = target.hp
-        self.uses -= 1
-        #print(f"{actor.name} used {self.name} on {target.name} for {heal_roll}")
-        actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.fullDefense, t_weakest, heal_roll, after_hp - before_hp])
+
+        original_pos = env.battlefield.getCharNode(actor)
+        if actor != target:
+            env.battlefield.moveCharacterTo(actor, target)
+            final_pos = env.battlefield.getCharNode(actor)
+        else :
+            final_pos = original_pos
+
+        if actor.hp > 0:
+            t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other))
+            # all([]) == True, which seems ok
+            heal_roll = self.heal_dice.roll()
+            before_hp = target.hp
+            target.heal(heal_roll)
+            after_hp = target.hp
+            self.uses -= 1
+            #print(f"{actor.name} used {self.name} on {target.name} for {heal_roll}")
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name,
+                                  target.fullDefense, t_weakest, heal_roll, after_hp - before_hp,
+                                  original_pos[0], original_pos[1], final_pos[0], final_pos[1]])
+        else:
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Interrupted', target.name,
+                                  target.fullDefense, None, None, None,
+                                  original_pos[0], original_pos[1], final_pos[0], final_pos[1]])
+
 
 class Spell(Action):
     # def __init__(self, name: str, level: int, concentration: bool = False):
@@ -428,8 +564,8 @@ class Spell(Action):
         if self.level > 0: actor.curr_spells[self.level-1] -= 1
 
     def _spell_attack(self, actor: Character, target: Character, env: Environment, dmg_dice: Dice, dmg_type: str):
-        ac_to_hit = target.get_touch_ac(False)
-        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
+        ac_to_hit = target.get_touch_ac()
+        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other))
         # all([]) == True, which seems ok
         attack_roll, nat_roll = D20(actor.rangedToHit).roll()
         if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1:
@@ -450,6 +586,7 @@ class Spell(Action):
 class MageArmor(Spell):
     name = 'Mage Armor'
     level = 1
+    concentration = False
     plausible_target = Action._conscious_ally
 
     def call(self, actor: Character, target: Character, env: Environment):
@@ -457,49 +594,10 @@ class MageArmor(Spell):
         target.flatFootedAc = 10 + max(target.armor.acBonus, 4)
         actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.fullDefense, False, 0, 0])
 
-class CureLightWounds(Spell):
-    name = 'Cure Light Wounds'
-    level = 1
-    plausible_target = Action._living_ally
-
-    def __call__(self, actor: Character, target: Character, env: Environment):
-        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other))
-        heal_roll = Dice('1d8+2').roll()
-        before_hp = target.hp
-        target.heal(heal_roll)
-        after_hp = target.hp
-        #print(f"{actor.name} used {self.name} on {target.name} for {heal_roll}")
-        actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.fullDefense, t_weakest, heal_roll, after_hp - before_hp])
-
-class ChannelEnergy():
-    def __init__(self, uses: int = 1):
-        self.name = 'Channel Energy'
-        self.heal_dice = Dice('1d6')
-        self.uses = uses
-
-    def is_forbidden(self, actor: Character, env: Environment):
-        return (self.uses <= 0)
-
-    def plausible_target(self, actor: Character, target: Character):
-        return target.team == actor.team and target.hp < target.max_hp and not target.dead
-
-    def __call__(self, actor: Character, target: Character, env: Environment):
-        if self.is_forbidden(actor, env):
-            return
-        # t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other))
-        # all([]) == True, which seems ok
-        heal_roll = self.heal_dice.roll()
-        for target in env.characters :
-            if self.plausible_target(actor, target):
-                target.heal(heal_roll)
-        self.uses -= 1
-        #print(f"{actor.name} used {self.name} on {target.name} for {heal_roll}")
-        actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, 'Team '+str(actor.team),
-                              target.fullDefense, None, heal_roll, None])
-
 class MagicMissle(Spell):
     name = 'Magic Missle'
     level = 1
+    concentration = False
     plausible_target = Action._conscious_enemy
 
     def call(self, actor: Character, target: Character, env: Environment):
@@ -514,6 +612,7 @@ class MagicMissle(Spell):
 class RayOfFrost(Spell):
     name = 'Ray of Frost'
     level = 0 # cantrip
+    concentration = False
     plausible_target = Action._conscious_enemy
 
     def call(self, actor: Character, target: Character, env: Environment):
@@ -544,7 +643,7 @@ class Environment:
     def __init__(self, characters):
         assert len(characters) == MAX_CHARS
         self.characters = characters
-        #self.battlefield = Graphttlefield(10, 10, self.characters)
+        self.battlefield = Graphttlefield(10, 10, self.characters)
 
     def run(self):
         chars = list(self.characters)
@@ -558,10 +657,10 @@ class Environment:
             #print({c.name: c.hp for c in chars})
             for actor in chars:
                 actor.start_of_round()
-                if actor.dead or actor.coma or actor.unconscious:
+                if actor.hp <= 0 or actor.unconscious:
                     continue
                 actor.act(self)
-            active_teams = set(c.team for c in chars if not c.dead)
+            active_teams = set(c.team for c in chars if c.hp > 0)
             if len(active_teams) <= 1:
                 break
             round_id += 1
@@ -596,10 +695,10 @@ def run_epoch(args):
             MeleeAttack(),
             RangedAttack(),
             FullDefense(),
-            HealingPotion('potion of healing', '1d8+1', uses=1),
+            HealingPotion('potion of healing', '2d4+2', uses=3),
         ],
         ability_mods=[3,2,2,-1,1,0], saving_throws=[5, 5, 1])
-    wizard_lvl2 = lambda i: PPOCharacter(strategies[0], name=f'Wizard {i}', team=0, hp=12, bab=1,
+    wizard_lvl2 = lambda i: PPOCharacter(strategies[0], name=f'Wizard {i}', team=0, hp=14, bab=1,
         armor=Unarmored(),
         meleeWeapon=UnarmedStrike(),
         rangedWeapon=None,
@@ -612,34 +711,20 @@ def run_epoch(args):
         ],
             ability_mods=[-1,2,2,3,1,0], saving_throws=[2, 2, 4],
             spells=[3,0,0,0,0,0,0,0,0], spell_save=13)
-    cleric_lvl2 = lambda i: PPOCharacter(strategies[1], name=f'Cleric {i}', team=0, hp=16, bab=1,
-        armor=BreastPlate(),
-        meleeWeapon=HeavyMace(),
-        rangedWeapon=None,
-        actions=[
-            MeleeAttack(),
-            FullDefense(),
-            HealingPotion('potion of healing', '1d8+1', uses=1),
-            CureLightWounds(),
-            ChannelEnergy(uses=3)
-        ],
-        ability_mods = [3, 1, 2, 0, 2, 0], saving_throws = [5, 1, 5],
-        spells = [4, 0, 0, 0, 0, 0, 0, 0, 0], spell_save = 12)
     #goblin = lambda i: RandomCharacter(f'Goblin {i}', team=1, hp=roll('2d6'), ac=15, actions=[
-    goblin = lambda i: PPOCharacter(strategies[2], survival=0, name=f'Goblin {i}', team=1, hp=6, bab=1,
+    goblin = lambda i: PPOCharacter(strategies[1], survival=0, name=f'Goblin {i}', team=1, hp=roll('2d6'), bab=1,
         armor=StuddedLeather(),
         meleeWeapon=SmallScimitar(),
         rangedWeapon=None,
         actions=[
             MeleeAttack(),
             FullDefense(),
-            HealingPotion('potion of healing', '1d8+1', uses=1),
         ],
-        ability_mods=[0,2,1,0,-1,-2], saving_throws=[3, 2, -1])
+        ability_mods=[-1,2,0,0,-1,1], saving_throws=[3, 4, -1])
     wins = 0
     for encounter_id in range(n):
-        env = [fighter_lvl2(1), fighter_lvl2(2), cleric_lvl2(1)]
-        for i in range(7): env.append(goblin(i+1))
+        env = [fighter_lvl2(1)]
+        for i in range(3): env.append(goblin(i+1))
         env = Environment(env)
         if env.run(): wins += 1
     return [s.buf for s in strategies] + [wins]
@@ -658,8 +743,8 @@ def merge_ppo_data(ppo_buffers):
 
 def main():
     epochs = 100
-    ncpu = 8 # using 8 doesn't seem to help on an M1
-    strategies = [PPOStrategy(4), PPOStrategy(5), PPOStrategy(3)]
+    ncpu = 4 # using 8 doesn't seem to help on an M1
+    strategies = [PPOStrategy(4), PPOStrategy(2)]
     with multiprocessing.Pool(ncpu, init_workers, (strategies,)) as pool:
         for epoch in trange(epochs):
             t1 = time.time()
@@ -673,4 +758,5 @@ def main():
             print(f"Epoch {epoch:04d}:  {wins.mean():.0f} ± {wins.std():.0f} wins in {t2-t1:.1f} + {t3-t2:.1f} sec")
 
 if __name__ == '__main__':
-    main()
+    #main()
+    g = Graphttlefield(5, 5, None)
