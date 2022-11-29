@@ -6,7 +6,7 @@ import enum
 import os
 import re
 import time
-from typing import Literal
+from typing import Literal, Union
 
 import numpy as np
 import torch
@@ -24,7 +24,7 @@ from arsenal import Longsword, Greatsword, Longbow, UnarmedStrike, SmallScimitar
 
 # Setup vars
 MAX_TURNS = 100
-MAX_CHARS = 4 + 5
+MAX_CHARS = 1 + 3
 OBS_SIZE = 4 * MAX_CHARS
 HP_SCALE = 20 # roughly, max HP across all entities in the battle (but a fixed constant, not rolled dice!)
 
@@ -151,9 +151,46 @@ class RandomCharacter(Character):
         target = rnd.choice(targets)
         action(actor=self, target=target)
 
+
+
+class BattleSquare():
+    def __init__(self, xy: list[int], contains:Union[None, str] = None):
+        self.xy = xy
+        self.contains = contains
+
 class Battlefield():
-    def __init__(self, shape : tuple):
-        self.grid = np.array(shape=shape)
+    def __init__(self, x, y, characters : list[Character]):
+        self.grid = np.empty(shape=(x, y))
+        self.charPositions = {} # Character name to position in list [x, y]
+        self.threatenDict = {} # Character name to list of threatened list positions [[x1, y1], [x2, y2]]
+
+        for i in range(x):
+            for j in range(y):
+                self.grid[i, j] = BattleSquare([i, j], contains=None)
+
+        i, j = 0, 0
+        for char in characters:
+            if char.team == 0:
+                self.updatePosition(0, i, char)
+                i += 1
+            if char.team == 1:
+                self.updatePosition(y-1, j, char)
+                j += 1
+
+    def updatePosition(self, x, y, char):
+        self.charPositions[char.name] = [x, y]
+        self.threatenDict[char.name] = self.getThreatened([x, y], char.meleeWeapon.range)
+
+    def getThreatened(self, index, range):
+        x1 = max(index[0] - range, 0)
+        y1 = max(index[1] - range, 0)
+        x2 = min(index[0] + range, self.grid.shape[0])
+        y2 = min(index[1] + range, self.grid.shape[1])
+        return [i for i, _ in np.ndenumerate(self.grid[x1:x2, y1:y2])]
+
+
+
+
 
 class PPOStrategy:
     def __init__(self, n_acts):
@@ -501,6 +538,7 @@ class Environment:
     def __init__(self, characters):
         assert len(characters) == MAX_CHARS
         self.characters = characters
+        self.battlefield = Battlefield((10, 10), self.characters)
 
     def run(self):
         chars = list(self.characters)
@@ -546,7 +584,7 @@ def run_epoch(args):
         s.buf.reset()
     fighter_lvl2 = lambda i: PPOCharacter(strategies[0], name=f'Fighter {i}', team=0, hp=20, bab=2,
         armor=FullPlate(),
-        meleeWeapon=Longsword(),
+        meleeWeapon=Greatsword(),
         rangedWeapon=Longbow(),
         actions=[
             MeleeAttack(),
@@ -555,7 +593,7 @@ def run_epoch(args):
             HealingPotion('potion of healing', '2d4+2', uses=3),
         ],
         ability_mods=[3,2,2,-1,1,0], saving_throws=[5, 5, 1])
-    wizard_lvl2 = lambda i: PPOCharacter(strategies[1], name=f'Wizard {i}', team=0, hp=14, bab=1,
+    wizard_lvl2 = lambda i: PPOCharacter(strategies[0], name=f'Wizard {i}', team=0, hp=14, bab=1,
         armor=Unarmored(),
         meleeWeapon=UnarmedStrike(),
         rangedWeapon=None,
@@ -569,7 +607,7 @@ def run_epoch(args):
             ability_mods=[-1,2,2,3,1,0], saving_throws=[2, 2, 4],
             spells=[3,0,0,0,0,0,0,0,0], spell_save=13)
     #goblin = lambda i: RandomCharacter(f'Goblin {i}', team=1, hp=roll('2d6'), ac=15, actions=[
-    goblin = lambda i: PPOCharacter(strategies[2], survival=0, name=f'Goblin {i}', team=1, hp=roll('2d6'), bab=1,
+    goblin = lambda i: PPOCharacter(strategies[1], survival=0, name=f'Goblin {i}', team=1, hp=roll('2d6'), bab=1,
         armor=StuddedLeather(),
         meleeWeapon=SmallScimitar(),
         rangedWeapon=None,
@@ -580,8 +618,8 @@ def run_epoch(args):
         ability_mods=[-1,2,0,0,-1,1], saving_throws=[3, 4, -1])
     wins = 0
     for encounter_id in range(n):
-        env = [fighter_lvl2(1), wizard_lvl2(1), fighter_lvl2(2), wizard_lvl2(2)]
-        for i in range(5): env.append(goblin(i+1))
+        env = [fighter_lvl2(1)]
+        for i in range(3): env.append(goblin(i+1))
         env = Environment(env)
         if env.run(): wins += 1
     return [s.buf for s in strategies] + [wins]
@@ -600,8 +638,8 @@ def merge_ppo_data(ppo_buffers):
 
 def main():
     epochs = 100
-    ncpu = 8 # using 8 doesn't seem to help on an M1
-    strategies = [PPOStrategy(4), PPOStrategy(5), PPOStrategy(2)]
+    ncpu = 4 # using 8 doesn't seem to help on an M1
+    strategies = [PPOStrategy(4), PPOStrategy(2)]
     with multiprocessing.Pool(ncpu, init_workers, (strategies,)) as pool:
         for epoch in trange(epochs):
             t1 = time.time()
