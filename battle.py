@@ -22,7 +22,7 @@ from arsenal import *
 
 # Setup vars
 MAX_TURNS = 100
-MAX_CHARS = 4 + 1
+MAX_CHARS = 4 + 2
 OBS_SIZE = 5 * MAX_CHARS
 HP_SCALE = 20 # roughly, max HP across all entities in the battle (but a fixed constant, not rolled dice!)
 
@@ -83,6 +83,8 @@ class Character:
         self.ac = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + self.armor.acBonus
         self.touchAc = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus)
         self.flatFootedAc = 10 + self.armor.acBonus
+        self.cmd = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + self.ability_mods[Ability.STR] + self.bab
+        self.cmb = min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + self.ability_mods[Ability.STR] + self.bab
 
         self.initiativeBonus = self.ability_mods[Ability.DEX]
 
@@ -110,6 +112,7 @@ class Character:
         self.petrified = False
         self.dead = False
         self.coma = False
+        self.prone = False
 
         # Medusa fighting strategy
         self.accuracy = 1
@@ -125,6 +128,8 @@ class Character:
             ac += 4
         if self.flatFooted or ff or self.petrified:
             ac = self.flatFootedAc
+        if self.prone:
+            ac -= 4
         return ac
 
     def get_touch_ac(self, ff):
@@ -133,11 +138,14 @@ class Character:
             ac += 4
         if self.flatFooted or ff:
             ac = 10
+        if self.prone:
+            ac -= 4
         return ac
 
     def start_of_round(self):
         self.fullDefense = False
         self.flatFooted = False
+        self.prone = False
 
     def end_of_encounter(self, env):
         pass
@@ -233,6 +241,7 @@ class PPOCharacter(Character):
                 (c.max_hp - c.hp) / HP_SCALE,   # Absolute hp lost -- we can track this as a player.
                 c.coma,                         # Coma (So in a very bad position)
                 c.dead,                         # Death (HP below death treshold)
+                c.prone,
                 c.fullDefense,                  # Pathfinder full Defense action adds AC
                 # Below this point is cheating -- info not available to players, only DM
                 #c.hp / HP_SCALE,               # current absolute health
@@ -348,6 +357,18 @@ class Awaken(Action):
         target.unconscious = False
         actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, False, False, 0, 0])
 
+class Trip(Action):
+    def plausible_target(self, actor: Character, target: Character):
+        return target.team != actor.team and not target.dead and not target.prone
+
+    def __call__(self, actor: Character, target: Character, env: Environment):
+        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
+        # all([]) == True, which seems ok
+        attack_roll, nat_roll = D20(actor.cmb).roll()
+        if (attack_roll >= target.cmd or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) <= actor.accuracy:
+            target.prone = True
+
+
 class MeleeAttack(Action):
     def plausible_target(self, actor: Character, target: Character):
         return target.team != actor.team and not target.dead
@@ -357,7 +378,7 @@ class MeleeAttack(Action):
         t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
         # all([]) == True, which seems ok
         attack_roll, nat_roll = D20(actor.meleeToHit).roll()
-        if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) > actor.accuracy:
+        if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) <= actor.accuracy:
             crit_hit = (nat_roll >= actor.meleeWeapon.critRange) or target.unconscious or target.coma
             dmg_roll = actor.meleeDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.meleeWeapon.critMul)
             before_hp = target.hp
@@ -486,7 +507,7 @@ class RangedAttack(Action):
         t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
         # all([]) == True, which seems ok
         attack_roll, nat_roll = D20(actor.rangedToHit).roll()
-        if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) > actor.accuracy:
+        if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) <= actor.accuracy:
             crit_hit = (nat_roll >= actor.rangedWeapon.critRange) or target.unconscious or target.coma
             dmg_roll = actor.meleeDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.rangedWeapon.critMul)
             before_hp = target.hp
@@ -736,6 +757,7 @@ def run_epoch(args):
             MeleeAttack(),
             RangedAttack(),
             FullDefense(),
+            Trip(),
             HealingPotion('potion of healing', '1d8+1', uses=1),
         ],
         ability_mods=[4,2,2,-1,1,0], saving_throws=[5, 5, 1])
@@ -781,6 +803,7 @@ def run_epoch(args):
             MeleeAttack(),
             FullDefense(),
             CureLightWounds(),
+            Trip(),
             ChannelEnergy(uses=3)
         ],
         ability_mods = [3, 1, 2, 0, 2, 0], saving_throws = [5, 1, 5],
@@ -802,13 +825,14 @@ def run_epoch(args):
         rangedWeapon=None,
         actions=[
             MeleeAttack(),
-            FullDefense()
+            FullDefense(),
+            Trip(),
         ],
         ability_mods=[0,2,1,0,-1,-2], saving_throws=[3, 2, -1])
     wins = 0
     for encounter_id in range(n):
-        env = [fighter_lvl2(1), defender_lvl2(1), archer_lvl2(1), cleric_lvl2(1), medusa(1)]
-        #for i in range(6): env.append(goblin(i+1))
+        env = [fighter_lvl2(1), cleric_lvl2(1)]
+        for i in range(4): env.append(goblin(i+1))
         env = Environment(env)
         if env.run(): wins += 1
     return [s.buf for s in strategies] + [wins]
@@ -828,7 +852,7 @@ def merge_ppo_data(ppo_buffers):
 def main(ncpu):
     epochs = 100
     ncpu = ncpu # using 8 doesn't seem to help on an M1
-    strategies = [PPOStrategy(4), PPOStrategy(3), PPOStrategy(4), PPOStrategy(4) ,PPOStrategy(3)]
+    strategies = [PPOStrategy(5), PPOStrategy(5), PPOStrategy(3)]
     with multiprocessing.Pool(ncpu, init_workers, (strategies,)) as pool:
         for epoch in trange(epochs):
             t1 = time.time()
