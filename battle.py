@@ -23,7 +23,7 @@ from arsenal import *
 # Setup vars
 MAX_TURNS = 100
 MAX_CHARS = 4 + 2
-OBS_SIZE = 6 * MAX_CHARS
+OBS_SIZE = 4 * MAX_CHARS
 HP_SCALE = 20 # roughly, max HP across all entities in the battle (but a fixed constant, not rolled dice!)
 
 Ability = enum.IntEnum('Ability', 'STR DEX CON INT WIS CHA', start=0)
@@ -237,12 +237,11 @@ class PPOCharacter(Character):
             obs.extend([
                 #c.team == self.team,           # On our team? Same for whole training run, so useless.
                 #(c.ac - 10) / 10,              # Armor class.  Right now, does not change.
-                c == self,                      # Ourself? maybe useful when 1 AI plays many monsters
+                #c == self,                      # Ourself? maybe useful when 1 AI plays many monsters
                 (c.max_hp - c.hp) / HP_SCALE,   # Absolute hp lost -- we can track this as a player.
                 c.coma,                         # Coma (So in a very bad position)
                 c.dead,                         # Death (HP below death treshold)
-                c.prone,
-                c.fullDefense,                  # Pathfinder full Defense action adds AC
+                c.prone,                        # Pathfinder full Defense action adds AC
                 # Below this point is cheating -- info not available to players, only DM
                 #c.hp / HP_SCALE,               # current absolute health
                 #c.max_hp / self.max_hp,        # Stronger or weaker than us? Varies if hp are rolled.
