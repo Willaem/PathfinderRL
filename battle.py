@@ -113,6 +113,7 @@ class Character:
         self.dead = False
         self.coma = False
         self.prone = False
+        self.protected = False
 
         # Medusa fighting strategy
         self.accuracy = 1
@@ -130,6 +131,8 @@ class Character:
             ac = self.flatFootedAc
         if self.prone:
             ac -= 4
+        if self.protected:
+            ac += 2
         return ac
 
     def get_touch_ac(self, ff):
@@ -140,6 +143,8 @@ class Character:
             ac = 10
         if self.prone:
             ac -= 4
+        if self.protected:
+            ac += 2
         return ac
 
     def start_of_round(self):
@@ -154,7 +159,7 @@ class Character:
         "Returns True if the save succeeds and False if it fails"
         if self.coma and saving_throw in [Saving_Throw.REF, Saving_Throw.FORT]:
             return False
-        mod_roll, nat_roll = D20(self.saving_throws[saving_throw]).roll()
+        mod_roll, nat_roll = D20(self.saving_throws[saving_throw] + 2*self.protected).roll()
         if nat_roll == 1: return False
         elif nat_roll == 20: return True
         else: return mod_roll >= save_dc
@@ -329,6 +334,9 @@ class Action:
     def _conscious_ally(self, actor: Character, target: Character):
         return target.team == actor.team and not target.coma
 
+    def _unprotected_ally(self, actor: Character, target: Character):
+        return target.team == actor.team and not target.coma and not target.protected
+
     def _living_ally(self, actor: Character, target: Character):
         return target.team == actor.team and not target.dead
 
@@ -343,7 +351,6 @@ class FullDefense(Action):
     plausible_target = Action._self_only
 
     def __call__(self, actor: Character, target: Character, env: Environment):
-
         actor.fullDefense = True
         actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, False, False, 0, 0])
 
@@ -365,6 +372,8 @@ class Trip(Action):
         attack_roll, nat_roll = D20(actor.cmb).roll()
         if (attack_roll >= target.cmd or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) <= actor.accuracy:
             target.prone = True
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Trip',
+                                  target.name, target.fullDefense, t_weakest, 0, 0])
 
 
 class MeleeAttack(Action):
@@ -614,7 +623,14 @@ class MageArmor(Spell):
         target.flatFootedAc = 10 + max(target.armor.acBonus, 4)
         actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.fullDefense, False, 0, 0])
 
+class ProtectionFromEvil(Spell):
+    name = 'Protection From Evil'
+    level = 1
+    plausible_target = Action._unprotected_ally
 
+    def call(self, actor: Character, target: Character, env: Environment):
+        target.protected = True
+        actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, self.name, target.name, target.fullDefense, False, 0, 0])
 
 class CureLightWounds(Spell):
     name = 'Cure Light Wounds'
@@ -720,7 +736,7 @@ class Environment:
                 if actor.dead or actor.coma or actor.unconscious:
                     continue
                 actor.act(self)
-            active_teams = set(c.team for c in chars if not c.dead)
+            active_teams = set(c.team for c in chars if not c.coma)
             if len(active_teams) <= 1:
                 break
             round_id += 1
@@ -766,6 +782,7 @@ def run_epoch(args):
       actions=[
           MeleeAttack(),
           FullDefense(),
+          Trip(),
           HealingPotion('potion of healing', '1d8+1', uses=1),
       ],
       ability_mods=[3, 2, 4, -1, 1, 0], saving_throws=[7, 5, 1])
@@ -793,7 +810,7 @@ def run_epoch(args):
         ],
             ability_mods=[-1,2,2,3,1,0], saving_throws=[2, 2, 4],
             spells=[3,0,0,0,0,0,0,0,0], spell_save=13)
-    cleric_lvl2 = lambda i: PPOCharacter(strategies[1], name=f'Cleric {i}', team=0, hp=16, bab=1,
+    cleric_lvl2 = lambda i: PPOCharacter(strategies[3], name=f'Cleric {i}', team=0, hp=16, bab=1,
         armor=BreastPlate(),
         meleeWeapon=HeavyMace(),
         rangedWeapon=None,
@@ -801,12 +818,13 @@ def run_epoch(args):
             MeleeAttack(),
             FullDefense(),
             CureLightWounds(),
+            ProtectionFromEvil(),
             Trip(),
             ChannelEnergy(uses=3)
         ],
         ability_mods = [3, 1, 2, 0, 2, 0], saving_throws = [5, 1, 5],
         spells = [4, 0, 0, 0, 0, 0, 0, 0, 0], spell_save = 12)
-    medusa = lambda i: PPOCharacter([4], survival=0.5, name=f'Medusa {i}', team=1, hp=76, bab=8,
+    medusa = lambda i: PPOCharacter(strategies[4], survival=0.5, name=f'Medusa {i}', team=1, hp=76, bab=8,
        armor=StuddedLeather(),
        meleeWeapon=Dagger(),
        rangedWeapon=Longbow(),
@@ -829,7 +847,7 @@ def run_epoch(args):
         ability_mods=[2,2,2,0,-1,-2], saving_throws=[3, 3, -1])
     wins = 0
     for encounter_id in range(n):
-        env = [fighter_lvl2(1), cleric_lvl2(1)]
+        env = [fighter_lvl2(1), defender_lvl2(1), cleric_lvl2(1), archer_lvl2(1), medusa(1)]
         for i in range(4): env.append(goblin(i+1))
         env = Environment(env)
         if env.run(): wins += 1
@@ -850,7 +868,7 @@ def merge_ppo_data(ppo_buffers):
 def main(ncpu):
     epochs = 100
     ncpu = ncpu # using 8 doesn't seem to help on an M1
-    strategies = [PPOStrategy(5), PPOStrategy(5), PPOStrategy(3)]
+    strategies = [PPOStrategy(5), PPOStrategy(4), PPOStrategy(4), PPOStrategy(6), PPOStrategy(3)]
     with multiprocessing.Pool(ncpu, init_workers, (strategies,)) as pool:
         for epoch in trange(epochs):
             t1 = time.time()
