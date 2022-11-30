@@ -57,6 +57,15 @@ class FullPlate(Armor):
             max_dex_bonus= 1,
             dex_penalty= -6)
 
+class FullPlateAndShield(Armor):
+    def __init__(self):
+        super().__init__(
+            name='Full Plate Armor And Shield',
+            ac=11,
+            armor_type='heavy',
+            max_dex_bonus=1,
+            dex_penalty=-8)
+
 class Weapon:
     def __init__(self, name:str, ranged:bool, base_die:str, crit_range:int, crit_mul:int, damage_type:str,
                  two_handed:bool = False, reach:int = 1, finesse:bool = False):
@@ -108,6 +117,17 @@ class Greatsword(Weapon):
                  damage_type: str = 'slashing'):
         super().__init__(name, ranged, base_die, crit_range, crit_mul, damage_type)
         self.twoHanded = True
+
+class Dagger(Weapon):
+    def __init__(self, name: str = 'Dagger',
+                 ranged: bool = False,
+                 base_die: str = 'd4',
+                 crit_range: int = 19,
+                 crit_mul: int = 2,
+                 damage_type: str = 'slashing'):
+        super().__init__(name, ranged, base_die, crit_range, crit_mul, damage_type)
+        self.finesse = True
+
 
 class HeavyMace(Weapon):
     def __init__(self):
