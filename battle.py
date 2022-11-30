@@ -23,7 +23,7 @@ from arsenal import *
 # Setup vars
 MAX_TURNS = 100
 MAX_CHARS = 4 + 2
-OBS_SIZE = 5 * MAX_CHARS
+OBS_SIZE = 6 * MAX_CHARS
 HP_SCALE = 20 # roughly, max HP across all entities in the battle (but a fixed constant, not rolled dice!)
 
 Ability = enum.IntEnum('Ability', 'STR DEX CON INT WIS CHA', start=0)
@@ -795,7 +795,7 @@ def run_epoch(args):
         ],
             ability_mods=[-1,2,2,3,1,0], saving_throws=[2, 2, 4],
             spells=[3,0,0,0,0,0,0,0,0], spell_save=13)
-    cleric_lvl2 = lambda i: PPOCharacter(strategies[3], name=f'Cleric {i}', team=0, hp=16, bab=1,
+    cleric_lvl2 = lambda i: PPOCharacter(strategies[1], name=f'Cleric {i}', team=0, hp=16, bab=1,
         armor=BreastPlate(),
         meleeWeapon=HeavyMace(),
         rangedWeapon=None,
@@ -808,7 +808,7 @@ def run_epoch(args):
         ],
         ability_mods = [3, 1, 2, 0, 2, 0], saving_throws = [5, 1, 5],
         spells = [4, 0, 0, 0, 0, 0, 0, 0, 0], spell_save = 12)
-    medusa = lambda i: PPOCharacter(strategies[4], survival=0.5, name=f'Medusa {i}', team=1, hp=76, bab=8,
+    medusa = lambda i: PPOCharacter([4], survival=0.5, name=f'Medusa {i}', team=1, hp=76, bab=8,
        armor=StuddedLeather(),
        meleeWeapon=Dagger(),
        rangedWeapon=Longbow(),
@@ -819,7 +819,7 @@ def run_epoch(args):
        ],
        ability_mods=[0, 2, 4, 1, 1, 2], saving_throws=[6, 8, 7])
     #goblin = lambda i: RandomCharacter(f'Goblin {i}', team=1, hp=roll('2d6'), ac=15, actions=[
-    goblin = lambda i: RandomCharacter(name=f'Goblin {i}', team=1, hp=6, bab=1,
+    goblin = lambda i: PPOCharacter(strategies[2], name=f'Goblin {i}', team=1, hp=12, bab=1,
         armor=StuddedLeather(),
         meleeWeapon=SmallScimitar(),
         rangedWeapon=None,
@@ -828,7 +828,7 @@ def run_epoch(args):
             FullDefense(),
             Trip(),
         ],
-        ability_mods=[0,2,1,0,-1,-2], saving_throws=[3, 2, -1])
+        ability_mods=[2,2,2,0,-1,-2], saving_throws=[3, 3, -1])
     wins = 0
     for encounter_id in range(n):
         env = [fighter_lvl2(1), cleric_lvl2(1)]
