@@ -865,8 +865,8 @@ def merge_ppo_data(ppo_buffers):
         out[key] = torch.cat([x[key] for x in data])
     return out
 
-def main(ncpu):
-    epochs = 100
+def main(epochs, ncpu):
+    epochs = epochs
     ncpu = ncpu # using 8 doesn't seem to help on an M1
     strategies = [PPOStrategy(5), PPOStrategy(4), PPOStrategy(4), PPOStrategy(6), PPOStrategy(3)]
     with multiprocessing.Pool(ncpu, init_workers, (strategies,)) as pool:
