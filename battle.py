@@ -23,7 +23,7 @@ from arsenal import *
 # Setup vars
 MAX_TURNS = 100
 MAX_CHARS = 4 + 1
-OBS_SIZE = 4 * MAX_CHARS
+OBS_SIZE = 5 * MAX_CHARS
 HP_SCALE = 20 # roughly, max HP across all entities in the battle (but a fixed constant, not rolled dice!)
 
 Ability = enum.IntEnum('Ability', 'STR DEX CON INT WIS CHA', start=0)
@@ -827,7 +827,7 @@ def merge_ppo_data(ppo_buffers):
 
 def main():
     epochs = 100
-    ncpu = 2 # using 8 doesn't seem to help on an M1
+    ncpu = 1 # using 8 doesn't seem to help on an M1
     strategies = [PPOStrategy(4), PPOStrategy(3), PPOStrategy(4), PPOStrategy(4) ,PPOStrategy(3)]
     with multiprocessing.Pool(ncpu, init_workers, (strategies,)) as pool:
         for epoch in trange(epochs):
