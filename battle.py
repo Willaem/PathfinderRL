@@ -22,17 +22,18 @@ from arsenal import *
 
 # Setup vars
 MAX_TURNS = 100
-MAX_CHARS = 4 + 2
+MAX_CHARS = 4 + 1
 OBS_SIZE = 3 * MAX_CHARS
-HP_SCALE = 20 # roughly, max HP across all entities in the battle (but a fixed constant, not rolled dice!)
+HP_SCALE = 75 # roughly, max HP across all entities in the battle (but a fixed constant, not rolled dice!)
 
 Ability = enum.IntEnum('Ability', 'STR DEX CON INT WIS CHA', start=0)
 Saving_Throw = enum.IntEnum('Saving Throw', 'REF FORT WILL', start=0)
+Experiment_Name = 'Medusa_Nostrat'
 
 epoch_id = encounter_id = round_id = -1
-actions_csv = csv.writer(open(f"actions_{os.getpid()}.csv", "w"))
+actions_csv = csv.writer(open(f"release/{Experiment_Name}/actions_{os.getpid()}.csv", "w"))
 actions_csv.writerow('epoch encounter round actor action target t_fullDefense t_weakest raw_hp obs_hp'.split())
-outcomes_csv = csv.writer(open(f"outcomes_{os.getpid()}.csv", "w"))
+outcomes_csv = csv.writer(open(f"release/{Experiment_Name}/outcomes_{os.getpid()}.csv", "w"))
 outcomes_csv.writerow('epoch encounter num_rounds actor team team_win max_hp final_hp'.split())
 
 class Dice:
@@ -64,7 +65,8 @@ class Character:
     def __init__(self, name: str, team: int, hp: int, bab: int, armor: Armor,
                  meleeWeapon: Weapon, rangedWeapon: Weapon, actions: list[Action],
                  ability_mods: list[int] = [0]*6, saving_throws: list[int] = None,
-                 spells: list[int] = [0]*9, spell_save=10):
+                 spells: list[int] = [0]*9, spell_save=10,
+                 initiative_boost=0, melee_boost=0, ranged_boost=0, ranged_damage_boost=0):
         self.name = name
         self.team = team
 
@@ -79,28 +81,11 @@ class Character:
         self.bab = bab
         self.actions = actions
 
-        # Infered stats
-        self.ac = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + self.armor.acBonus
-        self.touchAc = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus)
-        self.flatFootedAc = 10 + self.armor.acBonus
-        self.cmd = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + self.ability_mods[Ability.STR] + self.bab
-        self.cmb = min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + self.ability_mods[Ability.STR] + self.bab
-
-        self.initiativeBonus = self.ability_mods[Ability.DEX]
-
-        if self.meleeWeapon.finesse:
-            self.meleeToHit = self.bab + self.ability_mods[Ability.DEX]
-        else :
-            self.meleeToHit = self.bab + self.ability_mods[Ability.STR]
-
-        if self.meleeWeapon.twoHanded:
-            self.meleeDamageDie = Dice(str(1)+self.meleeWeapon.baseDie+'+'+str(int(self.ability_mods[Ability.STR])*1.5))
-        else :
-            self.meleeDamageDie = Dice(str(1)+self.meleeWeapon.baseDie+'+'+str(self.ability_mods[Ability.STR]))
-
-        self.rangedToHit = self.bab + self.ability_mods[Ability.DEX]
-        if self.rangedWeapon:
-            self.rangedDamageDie = Dice(str(1)+self.rangedWeapon.baseDie)
+        self.initiativeBuff = initiative_boost
+        self.meleeBuff = melee_boost
+        self.rangedBuff = ranged_boost
+        self.rangedDamageBuff = ranged_damage_boost
+        self.infer_stats()
 
         # Spellcasting
         self.max_spells = np.array(spells, dtype=int)
@@ -122,6 +107,38 @@ class Character:
         # State update
         self.start_of_round() # initializes some properties
         self.flatFooted = True # Everyone starts flat-footed
+
+    def infer_stats(self):
+        # Infered stats
+        self.ac = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + self.armor.acBonus
+        self.touchAc = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus)
+        self.flatFootedAc = 10 + self.armor.acBonus
+        self.cmd = 10 + min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + self.ability_mods[
+            Ability.STR] + self.bab
+        self.cmb = min(self.ability_mods[Ability.DEX], self.armor.maxDexBonus) + self.ability_mods[
+            Ability.STR] + self.bab
+
+        self.initiativeBonus = self.ability_mods[Ability.DEX] + self.initiativeBuff
+
+        if self.meleeWeapon.finesse:
+            self.meleeToHit = self.bab + self.ability_mods[Ability.DEX] + self.meleeBuff
+        else:
+            self.meleeToHit = self.bab + self.ability_mods[Ability.STR] + self.meleeBuff
+
+        if self.meleeWeapon.twoHanded:
+            self.meleeDamageDie = Dice(
+                str(1) + self.meleeWeapon.baseDie + '+' + str(int(self.ability_mods[Ability.STR]) * 1.5))
+            self.meleeDamagePADie = Dice(
+                str(1) + self.meleeWeapon.baseDie + '+' + str(int((self.ability_mods[Ability.STR]) * 1.5) + 3))
+        else:
+            self.meleeDamageDie = Dice(str(1) + self.meleeWeapon.baseDie + '+' + str(self.ability_mods[Ability.STR]))
+            self.meleeDamagePADie = Dice(
+                str(1) + self.meleeWeapon.baseDie + '+' + str(self.ability_mods[Ability.STR] + 2))
+
+        self.rangedToHit = self.bab + self.ability_mods[Ability.DEX] + self.rangedBuff
+        if self.rangedWeapon:
+            self.rangedDamageDie = Dice(str(1) + self.rangedWeapon.baseDie + '+' + str(self.rangedDamageBuff))
+            self.rangedDSDamageDie = Dice(str(1) + self.rangedWeapon.baseDie + '+' + str(self.rangedDamageBuff + 2))
 
     def get_ac(self, ff):
         ac = self.ac
@@ -181,6 +198,12 @@ class Character:
             self.hp = min(self.max_hp, self.hp + heal_hp)
             if self.hp >= 0:
                 self.coma = False
+
+    def takeStrDamage(self, damage:int):
+        self.ability_mods[Ability.STR] -= damage
+        if self.ability_mods[Ability.STR] <= -5:
+            self.coma = True
+        self.infer_stats()
 
 class RandomCharacter(Character):
     def act(self, env):
@@ -242,10 +265,10 @@ class PPOCharacter(Character):
             obs.extend([
                 #c.team == self.team,           # On our team? Same for whole training run, so useless.
                 #(c.ac - 10) / 10,              # Armor class.  Right now, does not change.
-                #c == self,                      # Ourself? maybe useful when 1 AI plays many monsters
+                c == self,                      # Ourself? maybe useful when 1 AI plays many monsters
                 (c.max_hp - c.hp) / HP_SCALE,   # Absolute hp lost -- we can track this as a player.
                 c.dead,                         # Death (HP below death treshold)
-                c.prone,                        # Pathfinder full Defense action adds AC
+                #c.prone,                        # Pathfinder prone condition is visible
                 # Below this point is cheating -- info not available to players, only DM
                 #c.hp / HP_SCALE,               # current absolute health
                 #c.max_hp / self.max_hp,        # Stronger or weaker than us? Varies if hp are rolled.
@@ -398,6 +421,58 @@ class MeleeAttack(Action):
             #print(f"{actor.name} attacked {target.name} with {self.name} and missed")
             actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.meleeWeapon.name,
                                   target.name, target.fullDefense, t_weakest, 0, 0])
+
+class MeleePowerAttack(Action):
+    def plausible_target(self, actor: Character, target: Character):
+        return target.team != actor.team and not target.dead
+
+    def __call__(self, actor: Character, target: Character, env: Environment):
+        ac_to_hit = target.get_ac(False)
+        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
+        # all([]) == True, which seems ok
+        attack_roll, nat_roll = D20(actor.meleeToHit).roll()
+        if (attack_roll -1 >= ac_to_hit or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) <= actor.accuracy:
+            crit_hit = (nat_roll >= actor.meleeWeapon.critRange) or target.unconscious or target.coma
+            dmg_roll = actor.meleeDamagePADie.roll(crit_hit=crit_hit, crit_mul=actor.meleeWeapon.critMul)
+            before_hp = target.hp
+            target.damage(dmg_roll, actor.meleeWeapon.damage_type)
+            after_hp = target.hp
+            #print(f"{actor.name} attacked {target.name} with {self.name} for {dmg_roll}")
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.meleeWeapon.name+' Power Attack',
+                                  target.name, target.fullDefense, t_weakest, -dmg_roll, after_hp - before_hp])
+        else:
+            #print(f"{actor.name} attacked {target.name} with {self.name} and missed")
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.meleeWeapon.name+' Power Attack',
+                                  target.name, target.fullDefense, t_weakest, 0, 0])
+
+
+class SpiderBite(Action):
+    def plausible_target(self, actor: Character, target: Character):
+        return target.team != actor.team and not target.dead
+
+    def __call__(self, actor: Character, target: Character, env: Environment):
+        ac_to_hit = target.get_ac(False)
+        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
+        # all([]) == True, which seems ok
+        attack_roll, nat_roll = D20(actor.meleeToHit).roll()
+        if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) <= actor.accuracy:
+            crit_hit = (nat_roll >= actor.meleeWeapon.critRange) or target.unconscious or target.coma
+            dmg_roll = actor.meleeDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.meleeWeapon.critMul)
+            before_hp = target.hp
+            target.damage(dmg_roll, actor.meleeWeapon.damage_type)
+            after_hp = target.hp
+
+            if target.saving_throw(16, Saving_Throw.FORT) and random.uniform(0, 1) <= 0.5:
+                target.takeStrDamage(1)
+
+            #print(f"{actor.name} attacked {target.name} with {self.name} for {dmg_roll}")
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Spider Bite',
+                                  target.name, target.fullDefense, t_weakest, -dmg_roll, after_hp - before_hp])
+        else:
+            #print(f"{actor.name} attacked {target.name} with {self.name} and missed")
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Spider Bite',
+                                  target.name, target.fullDefense, t_weakest, 0, 0])
+
 class UniqueMedusaFullDefense(Action):
     name = 'Full Defense'
     plausible_target = Action._self_only
@@ -410,6 +485,7 @@ class UniqueMedusaFullDefense(Action):
                 if other.dead:
                     before_hp = target.hp
                     other.hp = other.death_treshold
+                    other.coma = True
                     t_weakest = all(target.hp <= other.hp for other in env.characters
                                     if self.plausible_target(actor, other) and not other.coma)
                     actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Petrification',
@@ -432,6 +508,7 @@ class UniqueMedusaMeleeAttack(Action):
                 if other.dead:
                     before_hp = target.hp
                     other.hp = other.death_treshold
+                    other.coma = True
                     t_weakest = all(target.hp <= other.hp for other in env.characters
                                     if self.plausible_target(actor, other) and not other.coma)
                     actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Petrification',
@@ -439,7 +516,7 @@ class UniqueMedusaMeleeAttack(Action):
                                           other.hp - before_hp])
                     return
 
-        ac_to_hit = target.get_ac(False)
+        ac_to_hit = target.get_ac(True)
         t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
         totalDamage = 0
 
@@ -475,6 +552,7 @@ class UniqueMedusaRangedAttack(Action):
                 if other.dead:
                     before_hp = target.hp
                     other.hp = other.death_treshold
+                    other.coma = True
                     t_weakest = all(target.hp <= other.hp for other in env.characters
                                     if self.plausible_target(actor, other) and not other.coma)
                     actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Petrification',
@@ -482,7 +560,7 @@ class UniqueMedusaRangedAttack(Action):
                                           other.hp - before_hp])
                     return
 
-        ac_to_hit = target.get_ac(False)
+        ac_to_hit = target.get_ac(True)
         t_weakest = all(
         target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
         totalDamage = 0
@@ -496,7 +574,7 @@ class UniqueMedusaRangedAttack(Action):
 
         if totalDamage != 0:
             before_hp = target.hp
-            target.damage(totalDamage, actor.meleeWeapon.damage_type)
+            target.damage(totalDamage, actor.rangedWeapon.damage_type)
             after_hp = target.hp
             actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Medusa Ranged Attack',
                                   target.name, target.fullDefense, t_weakest, -totalDamage, after_hp - before_hp])
@@ -516,12 +594,35 @@ class RangedAttack(Action):
         attack_roll, nat_roll = D20(actor.rangedToHit).roll()
         if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) <= actor.accuracy:
             crit_hit = (nat_roll >= actor.rangedWeapon.critRange) or target.unconscious or target.coma
-            dmg_roll = actor.meleeDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.rangedWeapon.critMul)
+            dmg_roll = actor.rangedDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.rangedWeapon.critMul)
             before_hp = target.hp
             target.damage(dmg_roll, actor.rangedWeapon.damage_type)
             after_hp = target.hp
             #print(f"{actor.name} attacked {target.name} with {self.name} for {dmg_roll}")
             actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.rangedWeapon.name,
+                                  target.name, target.fullDefense, t_weakest, -dmg_roll, after_hp - before_hp])
+        else:
+            #print(f"{actor.name} attacked {target.name} with {self.name} and missed")
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.rangedWeapon.name,
+                                  target.name, target.fullDefense, t_weakest, 0, 0])
+
+class RangedDeadlyAttack(Action):
+    def plausible_target(self, actor: Character, target: Character):
+        return target.team != actor.team and not target.dead
+
+    def __call__(self, actor: Character, target: Character, env: Environment):
+        ac_to_hit = target.get_ac(False)
+        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
+        # all([]) == True, which seems ok
+        attack_roll, nat_roll = D20(actor.rangedToHit).roll()
+        if (attack_roll-1 >= ac_to_hit or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) <= actor.accuracy:
+            crit_hit = (nat_roll >= actor.rangedWeapon.critRange) or target.unconscious or target.coma
+            dmg_roll = actor.rangedDSDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.rangedWeapon.critMul)
+            before_hp = target.hp
+            target.damage(dmg_roll, actor.rangedWeapon.damage_type)
+            after_hp = target.hp
+            #print(f"{actor.name} attacked {target.name} with {self.name} for {dmg_roll}")
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, actor.rangedWeapon.name + ' Deadly Shot',
                                   target.name, target.fullDefense, t_weakest, -dmg_roll, after_hp - before_hp])
         else:
             #print(f"{actor.name} attacked {target.name} with {self.name} and missed")
@@ -538,10 +639,10 @@ class RapidShotRangedAttack(Action):
         totalDamage = 0
 
         for i in range(2):
-            attack_roll, nat_roll = D20(actor.rangedToHit - 2).roll()
-            if (attack_roll >= ac_to_hit or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) > actor.accuracy:
+            attack_roll, nat_roll = D20(actor.rangedToHit).roll()
+            if (attack_roll - 2 >= ac_to_hit or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) > actor.accuracy:
                 crit_hit = (nat_roll >= actor.rangedWeapon.critRange) or target.unconscious or target.coma
-                dmg_roll = actor.meleeDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.rangedWeapon.critMul)
+                dmg_roll = actor.rangedDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.rangedWeapon.critMul)
                 totalDamage += dmg_roll
 
         if totalDamage != 0:
@@ -549,11 +650,39 @@ class RapidShotRangedAttack(Action):
             target.damage(totalDamage, actor.rangedWeapon.damage_type)
             after_hp = target.hp
             #print(f"{actor.name} attacked {target.name} with {self.name} for {dmg_roll}")
-            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Rapid Shot '+actor.rangedWeapon.name,
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, '2xRS '+actor.rangedWeapon.name,
                                   target.name, target.fullDefense, t_weakest, -totalDamage, after_hp - before_hp])
         else:
             #print(f"{actor.name} attacked {target.name} with {self.name} and missed")
-            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, 'Rapid Shot '+actor.rangedWeapon.name,
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, '2xRS '+actor.rangedWeapon.name,
+                                  target.name, target.fullDefense, t_weakest, 0, 0])
+
+class RapidShotRangedDeadlyAttack(Action):
+    def plausible_target(self, actor: Character, target: Character):
+        return target.team != actor.team and not target.dead
+
+    def __call__(self, actor: Character, target: Character, env: Environment):
+        ac_to_hit = target.get_ac(False)
+        t_weakest = all(target.hp <= other.hp for other in env.characters if self.plausible_target(actor, other) and not other.coma)
+        totalDamage = 0
+
+        for i in range(2):
+            attack_roll, nat_roll = D20(actor.rangedToHit).roll()
+            if (attack_roll - 3 >= ac_to_hit or nat_roll == 20) and nat_roll != 1 and random.uniform(0, 1) > actor.accuracy:
+                crit_hit = (nat_roll >= actor.rangedWeapon.critRange) or target.unconscious or target.coma
+                dmg_roll = actor.rangedDSDamageDie.roll(crit_hit=crit_hit, crit_mul=actor.rangedWeapon.critMul)
+                totalDamage += dmg_roll
+
+        if totalDamage != 0:
+            before_hp = target.hp
+            target.damage(totalDamage, actor.rangedWeapon.damage_type)
+            after_hp = target.hp
+            #print(f"{actor.name} attacked {target.name} with {self.name} for {dmg_roll}")
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, '2xRS '+actor.rangedWeapon.name+ ' Deadly Shot',
+                                  target.name, target.fullDefense, t_weakest, -totalDamage, after_hp - before_hp])
+        else:
+            #print(f"{actor.name} attacked {target.name} with {self.name} and missed")
+            actions_csv.writerow([epoch_id, encounter_id, round_id, actor.name, '2xRS '+actor.rangedWeapon.name+ ' Deadly Shot',
                                   target.name, target.fullDefense, t_weakest, 0, 0])
 
 class HealingPotion(Action):
@@ -763,55 +892,65 @@ def run_epoch(args):
     epoch_id = epoch_id_
     for s in strategies:
         s.buf.reset()
-    fighter_lvl2 = lambda i: PPOCharacter(strategies[0], name=f'Fighter {i}', team=0, hp=20, bab=2,
-        armor=FullPlate(),
+
+    '''
+    Attacker : Fighter 2
+    Feats selected (4) : Toughness, Weapon Focus, Improved Initiative, Power attack
+    '''
+    fighter_lvl2 = lambda i: PPOCharacter(strategies[0], name=f'Fighter {i}', team=0, hp=24, bab=2,
+        armor=BreastPlate(),
         meleeWeapon=Greatsword(),
         rangedWeapon=Longbow(),
         actions=[
             MeleeAttack(),
+            MeleePowerAttack(),
             RangedAttack(),
             FullDefense(),
-            Trip(),
-            HealingPotion('potion of healing', '1d8+1', uses=1),
+            HealingPotion('potion of healing', '1d8+1', uses=2),
         ],
-        ability_mods=[4,2,2,-1,1,0], saving_throws=[5, 5, 1])
-    defender_lvl2 = lambda i: PPOCharacter(strategies[1], name=f'Defender {i}', team=0, hp=24, bab=2,
-      armor=FullPlateAndShield(),
+        ability_mods=[3,1,2,0,-1,-1], saving_throws=[5, 4, -1], initiative_boost=4, melee_boost=1)
+
+    '''
+    Defender : Fighter 2
+    Feats selected (4) : Toughness, Shield focus, Armor Focus, Power attack
+    '''
+    defender_lvl2 = lambda i: PPOCharacter(strategies[1], name=f'Defender {i}', team=0, hp=26, bab=2,
+      armor=BreastPlateAndShield2Focus(),
       meleeWeapon=Longsword(),
       rangedWeapon=None,
       actions=[
           MeleeAttack(),
+          MeleePowerAttack(),
           FullDefense(),
-          Trip(),
           HealingPotion('potion of healing', '1d8+1', uses=1),
       ],
-      ability_mods=[3, 2, 4, -1, 1, 0], saving_throws=[7, 5, 1])
-    archer_lvl2 = lambda i: PPOCharacter(strategies[2], name=f'Archer {i}', team=0, hp=18, bab=2,
-      armor=FullPlate(),
+      ability_mods=[2, 1, 3, 0,-1,-1], saving_throws=[6, 4, -1])
+
+    '''
+    Archer : Fighter 2
+    Feats selected (4) : Weapon Focus, Precise Shot, Point-blank Shot, Deadly Shot
+    '''
+    archer_lvl2 = lambda i: PPOCharacter(strategies[2], name=f'Archer {i}', team=0, hp=19, bab=2,
+      armor=StuddedLeather(),
       meleeWeapon=Dagger(),
       rangedWeapon=Longbow(),
       actions=[
           MeleeAttack(),
           RangedAttack(),
+          RangedDeadlyAttack(),
           RapidShotRangedAttack(),
+          RapidShotRangedDeadlyAttack(),
           FullDefense(),
       ],
-      ability_mods=[1, 4, 1, -1, 1, 0], saving_throws=[4, 7, 1])
-    wizard_lvl2 = lambda i: PPOCharacter(strategies[0], name=f'Wizard {i}', team=0, hp=12, bab=1,
-        armor=Unarmored(),
-        meleeWeapon=UnarmedStrike(),
-        rangedWeapon=None,
-        actions=[
-            MeleeAttack(),
-            MageArmor(),
-            MagicMissle(),
-            RayOfFrost(),
-            FullDefense()
-        ],
-            ability_mods=[-1,2,2,3,1,0], saving_throws=[2, 2, 4],
-            spells=[3,0,0,0,0,0,0,0,0], spell_save=13)
-    cleric_lvl2 = lambda i: PPOCharacter(strategies[3], name=f'Cleric {i}', team=0, hp=16, bab=1,
-        armor=BreastPlate(),
+      ability_mods=[1, 3, 2, 1, 0, -1], saving_throws=[5, 6, 0], ranged_boost=2, initiative_boost=4, ranged_damage_boost=1)
+
+    '''
+    Healer : Cleric 2
+    
+    Feats : Toughness, Selective Channeling, Improved Initiative
+    '''
+    cleric_lvl2 = lambda i: PPOCharacter(strategies[3], name=f'Cleric {i}', team=0, hp=19, bab=1,
+        armor=BreastPlateAndShield(),
         meleeWeapon=HeavyMace(),
         rangedWeapon=None,
         actions=[
@@ -819,13 +958,15 @@ def run_epoch(args):
             FullDefense(),
             CureLightWounds(),
             ProtectionFromEvil(),
-            Trip(),
             ChannelEnergy(uses=3)
         ],
-        ability_mods = [3, 1, 2, 0, 2, 0], saving_throws = [5, 1, 5],
-        spells = [4, 0, 0, 0, 0, 0, 0, 0, 0], spell_save = 12)
+        ability_mods = [1, -1, 2, 0, 3, 1], saving_throws = [5, -1, 6],
+        spells = [4, 0, 0, 0, 0, 0, 0, 0, 0], spell_save = 14,
+        initiative_boost=4)
+
+
     medusa = lambda i: PPOCharacter(strategies[4], survival=0.5, name=f'Medusa {i}', team=1, hp=76, bab=8,
-       armor=StuddedLeather(),
+       armor=MedusaNaturalArmor(),
        meleeWeapon=Dagger(),
        rangedWeapon=Longbow(),
        actions=[
@@ -833,22 +974,62 @@ def run_epoch(args):
            UniqueMedusaRangedAttack(),
            UniqueMedusaFullDefense()
        ],
-       ability_mods=[0, 2, 4, 1, 1, 2], saving_throws=[6, 8, 7])
-    #goblin = lambda i: RandomCharacter(f'Goblin {i}', team=1, hp=roll('2d6'), ac=15, actions=[
-    goblin = lambda i: PPOCharacter(strategies[2], name=f'Goblin {i}', team=1, hp=12, bab=1,
-        armor=StuddedLeather(),
-        meleeWeapon=SmallScimitar(),
+       ability_mods=[0, 2, 4, 1, 1, 2], saving_throws=[6, 8, 7],
+                                    ranged_boost=1, ranged_damage_boost=1, initiative_boost=4)
+
+    '''
+    Goblin Spider-Rider : Goblin Fighter 1 (CR1/2)
+    URL : https://www.d20pfsrd.com/bestiary/npc-s/npcs-cr-0/goblin-spider-rider/
+    
+    Feats : Improved Initiative, Quick Draw (No effect in simulation)
+    '''
+    goblin_fighter = lambda i: PPOCharacter(strategies[1], name=f'Goblin {i}', team=1, hp=6, bab=1,
+        armor=SmallScaleMail(),
+        meleeWeapon=SmallLongspear(),
+        rangedWeapon=SmallShortbow(),
+        actions=[
+            MeleeAttack(),
+            RangedAttack(),
+            FullDefense(),
+        ],
+        ability_mods=[1,1,1,0,2,0], saving_throws=[3, 1, 2], initiative_boost=4)
+
+    '''
+    Zombie : Medium Undead (CR1/2)
+    URL : https://www.d20pfsrd.com/bestiary/monster-listings/undead/zombie
+    
+    Feats : Toughness
+    '''
+    zombie = lambda i: PPOCharacter(strategies[1], name=f'Zombie {i}', team=1, hp=12, bab=0,
+        armor=ZombieNaturalArmor(),
+        meleeWeapon=Slam(),
         rangedWeapon=None,
         actions=[
             MeleeAttack(),
             FullDefense(),
-            Trip(),
         ],
-        ability_mods=[2,2,2,0,-1,-2], saving_throws=[3, 3, -1])
+        ability_mods=[4, 0, 0, 0, 0, 0], saving_throws=[0, 0, 3])
+
+    '''
+    Giant Crab Spider
+    URL : https://www.d20pfsrd.com/bestiary/monster-listings/vermin/spider/spider-giant-crab
+    
+    Feats : None
+    '''
+    spider = lambda i: PPOCharacter(strategies[1], name=f'Spider {i}', team=1, hp=11, bab=1,
+        armor=SpiderNaturalArmor(),
+        meleeWeapon=Spiderbite(),
+        rangedWeapon=None,
+        actions=[
+            SpiderBite(),
+            FullDefense(),
+        ],
+        ability_mods=[0, 2, 1, 0, 0, -4], saving_throws=[4, 2, 0])
+
     wins = 0
     for encounter_id in range(n):
-        env = [fighter_lvl2(1), defender_lvl2(1), cleric_lvl2(1), archer_lvl2(1), medusa(1)]
-        for i in range(4): env.append(goblin(i+1))
+        env = [fighter_lvl2(1), defender_lvl2(1), archer_lvl2(1), cleric_lvl2(1), medusa(1)]
+        #for i in range(4): env.append(spider(i+1))
         env = Environment(env)
         if env.run(): wins += 1
     return [s.buf for s in strategies] + [wins]
@@ -868,7 +1049,7 @@ def merge_ppo_data(ppo_buffers):
 def main(epochs, ncpu):
     epochs = epochs
     ncpu = ncpu # using 8 doesn't seem to help on an M1
-    strategies = [PPOStrategy(5), PPOStrategy(4), PPOStrategy(4), PPOStrategy(6), PPOStrategy(3)]
+    strategies = [PPOStrategy(5), PPOStrategy(4), PPOStrategy(6), PPOStrategy(5), PPOStrategy(3)]
     with multiprocessing.Pool(ncpu, init_workers, (strategies,)) as pool:
         for epoch in trange(epochs):
             t1 = time.time()

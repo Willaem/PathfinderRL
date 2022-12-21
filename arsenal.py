@@ -4,9 +4,9 @@ ARMOR_TYPE = Literal['none', 'light', 'medium', 'heavy']
 
 
 class Armor:
-    def __init__(self, name:str, ac:int, armor_type:ARMOR_TYPE, max_dex_bonus:int, dex_penalty = 0):
+    def __init__(self, name:str, ac:int, armor_type:ARMOR_TYPE, max_dex_bonus:int, dex_penalty = 0, focus:int=0):
         self.name = name
-        self.acBonus = ac
+        self.acBonus = ac + focus
         self.dexPenalty = dex_penalty
         self.maxDexBonus = max_dex_bonus
         self.type = armor_type
@@ -38,11 +38,61 @@ class BreastPlate(Armor):
             dex_penalty=-4
         )
 
+class SmallScaleMail(Armor):
+    def __init__(self):
+        super().__init__(
+            name='Scale Mail Armor',
+            ac=6,
+            armor_type='medium',
+            max_dex_bonus=3,
+            dex_penalty=-4
+        )
+
+class BreastPlateAndShield(Armor):
+    def __init__(self):
+        super().__init__(
+            name='Breatplate Armor And Shield',
+            ac=8,
+            armor_type='medium',
+            max_dex_bonus=3,
+            dex_penalty=-6
+        )
+
+class BreastPlateAndShield2Focus(Armor):
+    def __init__(self):
+        super().__init__(
+            name='Breatplate Armor And Shield',
+            ac=10,
+            armor_type='medium',
+            max_dex_bonus=3,
+            dex_penalty=-6
+        )
+
 class MedusaNaturalArmor(Armor):
     def __init__(self):
         super().__init__(
             name='Natural Armor',
             ac=3,
+            armor_type='none',
+            max_dex_bonus=100,
+            dex_penalty=0
+        )
+
+class ZombieNaturalArmor(Armor):
+    def __init__(self):
+        super().__init__(
+            name='Natural Armor',
+            ac=2,
+            armor_type='none',
+            max_dex_bonus=100,
+            dex_penalty=0
+        )
+
+class SpiderNaturalArmor(Armor):
+    def __init__(self):
+        super().__init__(
+            name='Natural Armor',
+            ac=1,
             armor_type='none',
             max_dex_bonus=100,
             dex_penalty=0
@@ -138,6 +188,52 @@ class HeavyMace(Weapon):
             crit_range=20,
             crit_mul=2,
             damage_type='bludgeoning'
+        )
+
+class SmallLongspear(Weapon):
+    def __init__(self):
+        super().__init__(
+            name='Longspear',
+            ranged=False,
+            base_die='d6',
+            crit_range=20,
+            crit_mul=3,
+            damage_type='Piercing'
+        )
+        self.twoHanded = True
+
+class SmallShortbow(Weapon):
+    def __init__(self):
+        super().__init__(
+            name='Shortbow',
+            ranged=True,
+            base_die='d4',
+            crit_range=20,
+            crit_mul=3,
+            damage_type='Piercing'
+        )
+        self.twoHanded = True
+
+class Slam(Weapon):
+    def __init__(self):
+        super().__init__(
+            name='Slam',
+            ranged=False,
+            base_die='d6',
+            crit_range=20,
+            crit_mul=2,
+            damage_type='Bludgeoning'
+        )
+
+class Spiderbite(Weapon):
+    def __init__(self):
+        super().__init__(
+            name='Bite',
+            ranged=False,
+            base_die='d4',
+            crit_range=20,
+            crit_mul=2,
+            damage_type='Piercing'
         )
 
 class Longbow(Weapon):
